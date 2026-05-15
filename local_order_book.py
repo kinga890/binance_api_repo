@@ -7,10 +7,9 @@ local_order_book = {}
 
 async def get_order_book_snapshot(client_from_main):
     order_book = await client_from_main.get_order_book(symbol='BTCUSDT', limit=1000)
-    print(f"oder book: {order_book}")
     local_order_book.update({
 
-        'lastUpdateID': order_book.get('lastUpdateId'),
+        'lastUpdateId': order_book.get('lastUpdateId'),
         'bids' : dict(
             order_book.get('bids')
         ),
@@ -18,7 +17,6 @@ async def get_order_book_snapshot(client_from_main):
             order_book.get('asks')
         )
          })
-
 
     snapshot_ID = order_book.get('lastUpdateId')
     return snapshot_ID
@@ -34,7 +32,47 @@ async def condition(client_from_main, depth_stream):
     task1 = asyncio.create_task(func())
     await asyncio.sleep(3)
 
-    snapshot_ID = await get_order_book_snapshot(client_from_main)
+    while True:
+        local_order_book.clear()
+
+        snapshot_ID = await get_order_book_snapshot(client_from_main)
+        await first_update(snapshot_ID)
+
+        while True:
+            package = await buffer.get()
+            websocket_U = package.get('U')
+            websocket_u = package.get('u')
+            if websocket_u < local_order_book.get('lastUpdateId'):
+                continue
+            if websocket_U > (int(local_order_book.get('lastUpdateId')) + 1):
+                break            #!!!!!!!!!!!!!!
+            if int(websocket_U) == (int(local_order_book.get('lastUpdateId'))+1):
+                #subsequent updates
+                for x in package.get('b'):
+
+                    if x[0] not in local_order_book['bids'].keys():  # new price appeared
+                        local_order_book['bids'].update({x[0]: x[1]})
+
+                    if float(x[1]) > 0.0:  # quantity change
+                        local_order_book['bids'][x[0]] = x[1]
+
+                    if float(x[1]) == 0.0:  # bid disappeared
+                        local_order_book['bids'].pop(x[0], None)
+
+                for y in package.get('a'):
+
+                    if y[0] not in local_order_book['asks'].keys():  # new price appeared
+                        local_order_book['asks'].update({y[0]: y[1]})
+
+                    if float(y[1]) > 0.0:  # quantity change
+                        local_order_book['asks'][y[0]] = y[1]
+
+                    if float(y[1]) == 0.0:  # ask disappeared
+                        local_order_book['asks'].pop(y[0], None)
+
+                local_order_book['lastUpdateId'] = websocket_u
+
+async def first_update(snapshot_ID):
 
     while True:
         package = await buffer.get()
@@ -68,7 +106,6 @@ async def condition(client_from_main, depth_stream):
             break
         else:
             continue
-
 
 async def get_websocket_data(client_from_main):
     websocket_conn = BinanceSocketManager(client=client_from_main)
