@@ -1,7 +1,11 @@
 import asyncio
-from binance import AsyncClient, BinanceSocketManager
+from binance import AsyncClient, BinanceSocketManager, BinanceAPIException, BinanceRequestException
+import logging
+
+logging.basicConfig(level = logging.INFO,filename = 'log.log',filemode = 'a',format = '%(asctime)s - %(levelname)s - %(message)s')
 
 buffer = asyncio.Queue(1000)
+
 local_order_book = {
     'lastUpdateId': 0,
     'bids': {},
@@ -24,18 +28,27 @@ def apply_updates(package, websocket_u):
 
 
 async def get_order_book_snapshot(client_from_main):
-    order_book = await client_from_main.get_order_book(symbol='BTCUSDT', limit=1000)
-    local_order_book.update({
-        'lastUpdateId': order_book.get('lastUpdateId'),
-        'bids': dict(
-            order_book.get('bids')
-        ),
-        'asks': dict(
-            order_book.get('asks')
-        )
-    })
-    snapshot_ID = int(order_book.get('lastUpdateId'))
-    return snapshot_ID
+
+    while True:
+        try:
+            order_book = await client_from_main.get_order_book(symbol='BTCUSDT', limit=1000)
+            local_order_book.update({
+                'lastUpdateId': order_book.get('lastUpdateId'),
+                'bids': dict(
+                    order_book.get('bids')
+                ),
+                'asks': dict(
+                    order_book.get('asks')
+                )
+            })
+            snapshot_ID = int(order_book.get('lastUpdateId'))
+            return snapshot_ID
+        except (BinanceAPIException,BinanceRequestException) as error:
+            logging.error(error)
+            await asyncio.sleep(5)
+        except Exception as e:
+            logging.error(f'unknown error: {e}')
+            await asyncio.sleep(5)
 
 
 async def get_websocket_data(client_from_main):
@@ -57,11 +70,17 @@ async def first_update(snapshot_ID):
 
 
 async def condition(client_from_main, depth_stream):
+
     async def func():
-        async with depth_stream as stream:
-            while True:
-                res = await stream.recv()
-                await buffer.put(res)
+        while True:
+            try:
+                async with depth_stream as stream:
+                    while True:
+                        res = await stream.recv()
+                        await buffer.put(res)
+            except Exception as e:
+                logging.error('websocket error')
+                await asyncio.sleep(5)
 
     task1 = asyncio.create_task(func())
     await asyncio.sleep(3)
@@ -77,19 +96,29 @@ async def condition(client_from_main, depth_stream):
             if websocket_u < current_lastUpdateId:
                 continue
             if websocket_U > (current_lastUpdateId + 1):
-                break  # error and exception handling needed here
+                break
             if websocket_U == (current_lastUpdateId + 1):
                 # subsequent updates
                 apply_updates(package, websocket_u)
 
 
 async def main():
-    client_conn = await AsyncClient.create()
-    taks_0 = await get_websocket_data(client_conn)
-    task_1 = condition(client_conn, taks_0)
-    await task_1
-    await client_conn.close_connection()
+
+    while True:
+        try:
+            client_conn = await AsyncClient.create()
+            break
+        except Exception as e:
+            logging.error('client error')
+            await asyncio.sleep(5)
+    try:
+        taks_0 = await get_websocket_data(client_conn)
+        task_1 = condition(client_conn, taks_0)
+        await task_1
+    finally:
+        await client_conn.close_connection()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
