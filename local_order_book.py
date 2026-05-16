@@ -4,7 +4,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 
 logging.basicConfig(level = logging.INFO,format = '%(asctime)s - %(levelname)s - %(message)s',
-                    handlers=[ RotatingFileHandler('log.log', maxBytes=5*1024*1024, backupCount=5),
+                    handlers=[ RotatingFileHandler('logs/log.log', maxBytes=5 * 1024 * 1024, backupCount=5),
         logging.StreamHandler() ]
 )
 buffer = asyncio.Queue()
