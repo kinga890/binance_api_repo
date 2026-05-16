@@ -1,10 +1,13 @@
 import asyncio
 from binance import AsyncClient, BinanceSocketManager, BinanceAPIException, BinanceRequestException
 import logging
+from logging.handlers import RotatingFileHandler
 
-logging.basicConfig(level = logging.INFO,filename = 'log.log',filemode = 'a',format = '%(asctime)s - %(levelname)s - %(message)s')
-
-buffer = asyncio.Queue(1000)
+logging.basicConfig(level = logging.INFO,format = '%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[ RotatingFileHandler('log.log', maxBytes=5*1024*1024, backupCount=5),
+        logging.StreamHandler() ]
+)
+buffer = asyncio.Queue()
 
 local_order_book = {
     'lastUpdateId': 0,
@@ -76,7 +79,7 @@ async def condition(client_from_main, depth_stream):
             try:
                 async with depth_stream as stream:
                     while True:
-                        res = await stream.recv()
+                        res = await asyncio.wait_for(stream.recv(), timeout= 10.0)
                         await buffer.put(res)
             except Exception as e:
                 logging.error('websocket error')
