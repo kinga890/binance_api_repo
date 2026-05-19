@@ -4,6 +4,7 @@ from binance import AsyncClient, BinanceSocketManager
 import logging
 from logging.handlers import RotatingFileHandler
 
+
 logging.basicConfig(level = logging.INFO,format = '%(asctime)s - %(levelname)s - %(message)s',
                     handlers=[ RotatingFileHandler('logs/log.log', maxBytes=5 * 1024 * 1024, backupCount=5),
         logging.StreamHandler() ]
@@ -44,15 +45,12 @@ async def get_order_book_snapshot(client_connection):
         try:
             order_book = await client_connection.get_order_book(symbol='BTCUSDT', limit=1000)
             local_order_book.update({
-                # 'E': int(time.time() * 1000),
-                # 'data_obtained_time': int(time.time() * 1000)
-                # both are useless here since im overwriting those in websocket_snapshot_match()
                 'lastUpdateId': int(order_book.get('lastUpdateId')),
                 'bids': {float(price) : float(quantity) for price,quantity in order_book.get('bids')},
                 'asks': {float(price) : float(quantity) for price,quantity in order_book.get('asks')}
-                # bids and asks must be here since its a full picture of the market not just changes as in websocket packages
+                # those bids and asks are a full picture of the market, not just changes that have appeared
             })
-            snapshot_ID = order_book.get('lastUpdateId')  #tu było wcześniej int ale nie potrzeba bo to już jest intem
+            snapshot_ID = order_book.get('lastUpdateId')
             return snapshot_ID
         except Exception as e:
             logging.error(f'getting snapshot error: {e}')
@@ -95,7 +93,7 @@ async def maintain_order_book(client_connection):
 
     while True:
         if buffer.qsize() != 0:
-            local_order_book.clear()    #data must go into csv before this !!!
+            local_order_book.clear()    # data must go into csv before this !!!
             snapshot_ID = await get_order_book_snapshot(client_connection)
             await websocket_snapshot_match(snapshot_ID)
             while True:
@@ -103,12 +101,12 @@ async def maintain_order_book(client_connection):
                 websocket_U = int(package.get('U'))
                 websocket_u = int(package.get('u'))
                 event_time = int(package.get('E'))
-                data_obtained_time = package.get('data_obtained_time')   # already int
+                data_obtained_time = package.get('data_obtained_time')
                 current_id = local_order_book.get('lastUpdateId')
                 if websocket_u < current_id:
                     continue
                 if websocket_U > (current_id + 1):
-                    break        #!!!! i wanna se Nan in csv
+                    break        #!!!! i want to see NaN in csv
                 if websocket_U == (current_id + 1):
                     # subsequent updates
                     apply_updates(package, websocket_u,event_time,data_obtained_time)
@@ -116,19 +114,43 @@ async def maintain_order_book(client_connection):
             await asyncio.sleep(3)
 
 
+class ContextManager:
+    def __init__(self, client):
+        self.client = client     #just an attribute
+
+    async def __aenter__(self):
+        client_connection = self.client
+        return client_connection
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.client.close_connection()
+
+
 async def main():
+    async with ContextManager(await AsyncClient.create()) as client_connection:
 
-    client_connection = await AsyncClient.create()
+        websocket_stream = await create_websocket_tunnel(client_connection)  # creating tunnel and returning websocket stream
 
-    websocket_stream = await create_websocket_tunnel(client_connection)   #creating tunnel and returning websocket stream
+        asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
 
-    asyncio.create_task(fetch_websocket_data(websocket_stream))   #fetching data from a websocket stream and putting them into the buffer (this never stops)
+        await maintain_order_book(client_connection)
 
-    await maintain_order_book(client_connection)
-
-    await client_connection.close_connection()
 
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+# async def main():
+#
+#     client_connection = await AsyncClient.create()
+#
+#     websocket_stream = await create_websocket_tunnel(client_connection)   # creating tunnel and returning websocket stream
+#
+#     asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
+#
+#     await maintain_order_book(client_connection)
+#
+#     await client_connection.close_connection()
+
+
 
