@@ -22,29 +22,8 @@ local_order_book = {
     'asks': {}
 }
 
-def apply_updates(package, websocket_u,event_time, data_obtained_time):
-    for x in package.get('b'):
-        bid_price = float(x[0])
-        bid_quantity = float(x[1])
-        if float(bid_quantity) > 0.0:  # quantity change or new price appeared
-            local_order_book['bids'][bid_price] = bid_quantity
-        else:  # bid disappeared float(x[1]) == 0.0
-            local_order_book['bids'].pop(bid_price, None)
-    for y in package.get('a'):
-        ask_price = float(y[0])
-        ask_quantity = float(y[1])
-        if float(ask_quantity) > 0.0:  # quantity change or new price appeared
-            local_order_book['asks'][ask_price] = ask_quantity
-        else:  # ask disappeared: float(y[1]) == 0.0
-            local_order_book['asks'].pop(ask_price, None)
-    local_order_book['E'] = event_time
-    local_order_book['data_obtained_time'] = data_obtained_time
-    local_order_book['lastUpdateId'] = websocket_u
-
-
 
 async def get_order_book_snapshot(client_connection):
-
     while True:
         try:
             order_book = await client_connection.get_order_book(symbol='BTCUSDT', limit=1000)
@@ -66,6 +45,37 @@ async def create_websocket_tunnel(client_connection):
     websocket_stream = websocket_tunnel.depth_socket(symbol='BTCUSDT')
     return websocket_stream
 
+async def fetch_websocket_data(websocket_stream):
+    while True:
+        try:
+            async with websocket_stream as stream:
+                while True:
+                    res = await asyncio.wait_for(stream.recv(), timeout= 10.0)
+                    res['data_obtained_time'] = int(time.time() * 1000)
+                    await buffer.put(res)
+        except Exception as e:
+            logging.error('websocket error')
+            await asyncio.sleep(5)
+
+def apply_updates(package, websocket_u,event_time, data_obtained_time):
+    for x in package.get('b'):
+        bid_price = float(x[0])
+        bid_quantity = float(x[1])
+        if float(bid_quantity) > 0.0:  # quantity change or new price appeared
+            local_order_book['bids'][bid_price] = bid_quantity
+        else:  # bid disappeared float(x[1]) == 0.0
+            local_order_book['bids'].pop(bid_price, None)
+    for y in package.get('a'):
+        ask_price = float(y[0])
+        ask_quantity = float(y[1])
+        if float(ask_quantity) > 0.0:  # quantity change or new price appeared
+            local_order_book['asks'][ask_price] = ask_quantity
+        else:  # ask disappeared: float(y[1]) == 0.0
+            local_order_book['asks'].pop(ask_price, None)
+    local_order_book['E'] = event_time
+    local_order_book['data_obtained_time'] = data_obtained_time
+    local_order_book['lastUpdateId'] = websocket_u
+
 
 async def websocket_snapshot_match(snapshot_ID):
     while True:
@@ -79,19 +89,6 @@ async def websocket_snapshot_match(snapshot_ID):
             break
         else:
             continue
-
-async def fetch_websocket_data(websocket_stream):
-    while True:
-        try:
-            async with websocket_stream as stream:
-                while True:
-                    res = await asyncio.wait_for(stream.recv(), timeout= 10.0)
-                    res['data_obtained_time'] = int(time.time() * 1000)
-                    await buffer.put(res)
-        except Exception as e:
-            logging.error('websocket error')
-            await asyncio.sleep(5)
-
 
 async def maintain_order_book(client_connection):
 
@@ -110,6 +107,8 @@ async def maintain_order_book(client_connection):
                 if websocket_u < current_id:
                     continue
                 if websocket_U > (current_id + 1):
+
+                    logging.warning('Nan')
 
                     nan_row = "Nan,Nan,Nan,Nan,Nan\n"
                     async with aiofiles.open('database.csv', mode='a') as file:
@@ -144,7 +143,7 @@ async def write_to_database(event_time):
         async with aiofiles.open('database.csv', mode='a') as file:
 
             if not file_exists:
-                
+
                 header = "time,bid_price,bid_quantity,ask_price,ask_quantity\n"
                 await file.write(header)
 
@@ -152,26 +151,33 @@ async def write_to_database(event_time):
 
 
 class ContextManager:
-    def __init__(self, client):
-        self.client = client     #just an attribute
+    def __init__(self):
+        self.client_connection = None
 
     async def __aenter__(self):
-        client_connection = self.client
-        return client_connection
+        self.client_connection = await AsyncClient.create()
+        return self.client_connection
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.client.close_connection()
+        if self.client_connection is not None:
+            await self.client_connection.close_connection()
+
 
 
 async def main():
-    async with ContextManager(await AsyncClient.create()) as client_connection:
 
-        websocket_stream = await create_websocket_tunnel(client_connection)  # creating tunnel and returning websocket stream
+    while True:
+        try:
+            async with ContextManager() as client_connection:
 
-        asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
+                websocket_stream = await create_websocket_tunnel(client_connection)  # creating tunnel and returning websocket stream
 
-        await maintain_order_book(client_connection)
+                asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
 
+                await maintain_order_book(client_connection)
+        # if an exception occurs here aexit is executed, connection is being closed
+        except Exception:
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
