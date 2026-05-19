@@ -3,6 +3,9 @@ import time
 from binance import AsyncClient, BinanceSocketManager
 import logging
 from logging.handlers import RotatingFileHandler
+import aiofiles
+import aiofiles.os
+import heapq
 
 
 logging.basicConfig(level = logging.INFO,format = '%(asctime)s - %(levelname)s - %(message)s',
@@ -37,6 +40,7 @@ def apply_updates(package, websocket_u,event_time, data_obtained_time):
     local_order_book['E'] = event_time
     local_order_book['data_obtained_time'] = data_obtained_time
     local_order_book['lastUpdateId'] = websocket_u
+
 
 
 async def get_order_book_snapshot(client_connection):
@@ -93,7 +97,7 @@ async def maintain_order_book(client_connection):
 
     while True:
         if buffer.qsize() != 0:
-            local_order_book.clear()    # data must go into csv before this !!!
+            local_order_book.clear()
             snapshot_ID = await get_order_book_snapshot(client_connection)
             await websocket_snapshot_match(snapshot_ID)
             while True:
@@ -106,12 +110,45 @@ async def maintain_order_book(client_connection):
                 if websocket_u < current_id:
                     continue
                 if websocket_U > (current_id + 1):
-                    break        #!!!! i want to see NaN in csv
+
+                    nan_row = "Nan,Nan,Nan,Nan,Nan\n"
+                    async with aiofiles.open('database.csv', mode='a') as file:
+                        await file.write(nan_row)
+
+                    break
                 if websocket_U == (current_id + 1):
                     # subsequent updates
                     apply_updates(package, websocket_u,event_time,data_obtained_time)
+
+                    await write_to_database(event_time)
+
         else:
             await asyncio.sleep(3)
+
+async def write_to_database(event_time):
+
+        #taking top 50 bids from a package
+        normal_row = []
+        top_50_bids = heapq.nlargest(50, local_order_book['bids'].items(), key= lambda x : x[0])
+        top_50_asks = heapq.nsmallest(50, local_order_book['asks'].items(), key= lambda x : x[0])
+        for (x,y), (z,w) in zip(top_50_bids,top_50_asks):
+            bid_price = x
+            bid_quantity = y
+            ask_price = z
+            ask_quantity = w
+
+            normal_row.append(f"{event_time},{bid_price},{bid_quantity},{ask_price},{ask_quantity}\n")
+
+        file_exists = await aiofiles.os.path.exists('database.csv')
+
+        async with aiofiles.open('database.csv', mode='a') as file:
+
+            if not file_exists:
+                
+                header = "time,bid_price,bid_quantity,ask_price,ask_quantity\n"
+                await file.write(header)
+
+            await file.writelines(normal_row)
 
 
 class ContextManager:
@@ -140,17 +177,6 @@ async def main():
 if __name__ == "__main__":
     asyncio.run(main())
 
-# async def main():
-#
-#     client_connection = await AsyncClient.create()
-#
-#     websocket_stream = await create_websocket_tunnel(client_connection)   # creating tunnel and returning websocket stream
-#
-#     asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
-#
-#     await maintain_order_book(client_connection)
-#
-#     await client_connection.close_connection()
 
 
 
