@@ -111,7 +111,7 @@ async def maintain_order_book(client_connection):
                     logging.warning('Nan')
 
                     nan_row = "Nan,Nan,Nan,Nan,Nan\n"
-                    async with aiofiles.open('database.csv', mode='a') as file:
+                    async with aiofiles.open('database.csv', mode='a', encoding ='utf-8') as file:
                         await file.write(nan_row)
 
                     break
@@ -130,6 +130,7 @@ async def write_to_database(event_time):
         normal_row = []
         top_50_bids = heapq.nlargest(50, local_order_book['bids'].items(), key= lambda x : x[0])
         top_50_asks = heapq.nsmallest(50, local_order_book['asks'].items(), key= lambda x : x[0])
+
         for (x,y), (z,w) in zip(top_50_bids,top_50_asks):
             bid_price = x
             bid_quantity = y
@@ -138,15 +139,7 @@ async def write_to_database(event_time):
 
             normal_row.append(f"{event_time},{bid_price},{bid_quantity},{ask_price},{ask_quantity}\n")
 
-        file_exists = await aiofiles.os.path.exists('database.csv')
-
-        async with aiofiles.open('database.csv', mode='a') as file:
-
-            if not file_exists:
-
-                header = "time,bid_price,bid_quantity,ask_price,ask_quantity\n"
-                await file.write(header)
-
+        async with aiofiles.open('database.csv', mode='a', encoding= 'utf-8') as file:
             await file.writelines(normal_row)
 
 
@@ -155,6 +148,15 @@ class ContextManager:
         self.client_connection = None
 
     async def __aenter__(self):
+
+        file_exists = await aiofiles.os.path.exists('database.csv')
+
+        if not file_exists:
+            async with aiofiles.open('database.csv', mode='a', encoding = 'utf-8') as file:
+                header = "time,bid_price,bid_quantity,ask_price,ask_quantity\n"
+                await file.write(header)
+
+        logging.info('Connecting to Binance client')
         self.client_connection = await AsyncClient.create()
         return self.client_connection
 
@@ -172,11 +174,16 @@ async def main():
 
                 websocket_stream = await create_websocket_tunnel(client_connection)  # creating tunnel and returning websocket stream
 
-                asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
+                fetch_task = asyncio.create_task(fetch_websocket_data(websocket_stream))   # fetching data from a websocket stream and putting them into the buffer (this never stops)
 
                 await maintain_order_book(client_connection)
         # if an exception occurs here aexit is executed, connection is being closed
-        except Exception:
+        except Exception as e:
+            logging.error(e)
+
+            if 'fetch_task' in locals() and fetch_task.done() == False:
+                fetch_task.cancel()
+
             await asyncio.sleep(5)
 
 
